@@ -4,8 +4,10 @@ import (
 	"errors"
 	"github.com/ecodeclub/ecron/internal/executor"
 	executormocks "github.com/ecodeclub/ecron/internal/executor/mocks"
+	"github.com/ecodeclub/ecron/internal/preempt"
 	"github.com/ecodeclub/ecron/internal/storage"
 	daomocks "github.com/ecodeclub/ecron/internal/storage/mocks"
+	"github.com/ecodeclub/ecron/internal/task"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/net/context"
@@ -71,12 +73,22 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
-			td, hd, _ := tc.mock(ctrl)
+			td, _, _ := tc.mock(ctrl)
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-			s := NewPreemptScheduler(td, hd, tc.refreshInterval, tc.limiter, logger)
-			ticker := time.NewTicker(time.Second)
-			err := s.refreshTask(tc.ctxFn(), ticker, 1)
-			assert.Equal(t, tc.wantErr, err)
+			preempter := preempt.NewDBPreempter(td, tc.refreshInterval, logger)
+			errch, cancelch, err2 := preempter.AutoRefresh(tc.ctxFn(), task.Task{
+				ID: 1,
+			})
+			assert.NoError(t, err2)
+			select {
+			case err := <-errch:
+				assert.Equal(t, tc.wantErr, err)
+			}
+			defer func() { close(cancelch) }()
+			//s := NewPreemptScheduler(td, hd, tc.refreshInterval, tc.limiter, logger)
+			//ticker := time.NewTicker(time.Second)
+			//err := preempter.refreshTask(tc.ctxFn(), ticker, 1)
+
 		})
 	}
 }
