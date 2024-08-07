@@ -25,6 +25,7 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 		refreshInterval time.Duration
 		limiter         *semaphore.Weighted
 		wantErr         error
+		wantStatus      preempt.LeaseStatus
 		ctxFn           func() context.Context
 	}{
 		{
@@ -35,6 +36,7 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 				exec := executormocks.NewMockExecutor(ctrl)
 
 				td.EXPECT().UpdateUtime(gomock.Any(), int64(1)).Return(errors.New("UpdateUtime error"))
+				td.EXPECT().Release(gomock.Any(), gomock.Any()).Return(nil)
 
 				return td, hd, exec
 			},
@@ -43,7 +45,8 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 			ctxFn: func() context.Context {
 				return context.Background()
 			},
-			wantErr: errors.New("UpdateUtime error"),
+			wantErr:    errors.New("UpdateUtime error"),
+			wantStatus: preempt.LeaseStatusUnknown,
 		},
 		{
 			name: "context被取消了",
@@ -53,12 +56,14 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 				exec := executormocks.NewMockExecutor(ctrl)
 
 				td.EXPECT().UpdateUtime(gomock.Any(), int64(1)).AnyTimes().Return(nil)
+				td.EXPECT().Release(gomock.Any(), gomock.Any()).Return(nil)
 
 				return td, hd, exec
 			},
 			refreshInterval: time.Second * 1,
 			limiter:         semaphore.NewWeighted(10),
-			wantErr:         context.Canceled,
+			//wantErr:         context.Canceled,
+			wantStatus: preempt.LeaseStatusSuccessAndExit,
 			ctxFn: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
 				go func() {
@@ -76,15 +81,15 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 			td, _, _ := tc.mock(ctrl)
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 			preempter := preempt.NewDBPreempter(td, tc.refreshInterval, logger)
-			errch, cancelch, err2 := preempter.AutoRefresh(tc.ctxFn(), task.Task{
+			sch, err2 := preempter.AutoRefresh(tc.ctxFn(), task.Task{
 				ID: 1,
 			})
 			assert.NoError(t, err2)
 			select {
-			case err := <-errch:
-				assert.Equal(t, tc.wantErr, err)
+			case s := <-sch:
+				assert.Equal(t, tc.wantErr, s.Err())
+				assert.Equal(t, tc.wantStatus, s.GetStatus())
 			}
-			defer func() { close(cancelch) }()
 			//s := NewPreemptScheduler(td, hd, tc.refreshInterval, tc.limiter, logger)
 			//ticker := time.NewTicker(time.Second)
 			//err := preempter.refreshTask(tc.ctxFn(), ticker, 1)
