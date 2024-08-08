@@ -160,7 +160,12 @@ func (d *DBPreempter) AutoRefreshV1(ctx context.Context, t task.Task) (s <-chan 
 	sch := make(chan Status, d.buffSize)
 	go func() {
 		err2 := d.autoRefresh(ctx, t)
-		sch <- newDefaultLeaseStatus(err2)
+		select {
+		case sch <- newDefaultLeaseStatus(err2):
+		default:
+
+		}
+
 	}()
 
 	return sch, nil
