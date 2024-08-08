@@ -125,7 +125,7 @@ func (d *DBPreempter) autoRefresh(ctx context.Context, t task.Task) error {
 		case errors.Is(err, context.DeadlineExceeded):
 			var i = 0
 			for i < int(d.maxRetryTimes) {
-				err := d.Refresh(ctx, t)
+				err = d.Refresh(ctx, t)
 				switch {
 				case err == nil:
 					break
