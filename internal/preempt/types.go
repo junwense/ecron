@@ -78,9 +78,10 @@ type DBPreempter struct {
 	logger          *slog.Logger
 
 	// with options
-	debug         bool
-	buffSize      uint8
-	maxRetryTimes uint8
+	debug          bool
+	buffSize       uint8
+	maxRetryTimes  uint8
+	retrySleepTime time.Duration
 }
 
 func NewDBPreempter(dao storage.TaskDAO, refreshInterval time.Duration, logger *slog.Logger) *DBPreempter {
@@ -89,9 +90,10 @@ func NewDBPreempter(dao storage.TaskDAO, refreshInterval time.Duration, logger *
 		refreshInterval: refreshInterval,
 		logger:          logger,
 
-		debug:         false,
-		buffSize:      10,
-		maxRetryTimes: 3,
+		debug:          false,
+		buffSize:       10,
+		maxRetryTimes:  3,
+		retrySleepTime: time.Second,
 	}
 }
 
@@ -131,6 +133,7 @@ func (d *DBPreempter) autoRefresh(ctx context.Context, t task.Task) error {
 					break
 				case errors.Is(err, context.DeadlineExceeded):
 					i++
+					time.Sleep(d.retrySleepTime)
 					continue
 				default:
 					return err
