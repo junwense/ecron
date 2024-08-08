@@ -31,15 +31,15 @@ type Preempter interface {
 // Lease 需要保证不能处理到别人到租约
 type Lease interface {
 	// Refresh 保证幂等
-	Refresh(ctx context.Context, t task.Task) (err error)
+	Refresh(ctx context.Context, t task.Task) error
 	// Release 保证幂等
 	Release(ctx context.Context, t task.Task) error
 }
 
 type Status interface {
 	Err() error
-	GetStatus() LeaseStatus
-	GetMsg() string
+	getStatus() LeaseStatus
+	getMsg() string
 }
 
 type DefaultLeaseStatus struct {
@@ -52,11 +52,11 @@ func (d DefaultLeaseStatus) Err() error {
 	return d.err
 }
 
-func (d DefaultLeaseStatus) GetStatus() LeaseStatus {
+func (d DefaultLeaseStatus) getStatus() LeaseStatus {
 	return d.s
 }
 
-func (d DefaultLeaseStatus) GetMsg() string {
+func (d DefaultLeaseStatus) getMsg() string {
 	return d.msg
 }
 
@@ -99,6 +99,68 @@ func (d *DBPreempter) Preempt(ctx context.Context) (task.Task, error) {
 	ctx2, cancel := context.WithTimeout(ctx, time.Second*3)
 	defer cancel()
 	return d.dao.Preempt(ctx2)
+}
+
+func (d *DBPreempter) refreshTask(ctx context.Context, ticker *time.Ticker, t task.Task) error {
+	for {
+		select {
+		case <-ticker.C:
+			err := d.Refresh(ctx, t)
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (d *DBPreempter) autoRefresh(ctx context.Context, t task.Task) error {
+
+	ticker := time.NewTicker(d.refreshInterval)
+	defer ticker.Stop()
+	for {
+		err := d.refreshTask(ctx, ticker, t)
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			var i = 0
+			for i < int(d.maxRetryTimes) {
+				err := d.Refresh(ctx, t)
+				switch {
+				case err == nil:
+					break
+				case errors.Is(err, context.DeadlineExceeded):
+					i++
+					continue
+				default:
+					return err
+				}
+			}
+
+			if err != nil {
+				return err
+			}
+			ticker.Reset(d.refreshInterval)
+		default:
+			return err
+		}
+	}
+}
+
+func newDefaultLeaseStatus(err error) DefaultLeaseStatus {
+	return DefaultLeaseStatus{
+		err: err,
+	}
+}
+
+func (d *DBPreempter) AutoRefreshV1(ctx context.Context, t task.Task) (s <-chan Status, err error) {
+	sch := make(chan Status, d.buffSize)
+	go func() {
+		err2 := d.autoRefresh(ctx, t)
+		sch <- newDefaultLeaseStatus(err2)
+	}()
+
+	return sch, nil
 }
 
 func (d *DBPreempter) AutoRefresh(ctx context.Context, t task.Task) (s <-chan Status, err error) {
@@ -263,7 +325,7 @@ func (d *DBPreempter) AutoRefresh(ctx context.Context, t task.Task) (s <-chan St
 					s:   LeaseStatusSuccessAndExit,
 					msg: "续约退出",
 					// 这里是否要返回错误
-					//err: ctx.Err(),
+					err: ctx.Err(),
 				}
 				once.Do(func() {
 					d.release(ticker, ctx, t)
@@ -336,11 +398,11 @@ func (p *PreempterExample) DoPreempt(ctx context.Context, f func(ctx context.Con
 	if err != nil {
 		return err
 	}
-
+	// 这里有bug
 	eg, ectx := errgroup.WithContext(ctx)
-
+	cancel, cancelFunc := context.WithCancel(ectx)
 	eg.Go(func() error {
-		ch, err := p.p1.AutoRefresh(ectx, myTask)
+		ch, err := p.p1.AutoRefresh(cancel, myTask)
 		if err != nil {
 			return err
 		}
@@ -356,6 +418,8 @@ func (p *PreempterExample) DoPreempt(ctx context.Context, f func(ctx context.Con
 	})
 
 	eg.Go(func() error {
+
+		defer func() { cancelFunc() }()
 
 		for i := len(p.mdls) - 1; i >= 0; i-- {
 			f = p.mdls[i](f)

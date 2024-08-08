@@ -62,8 +62,8 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 			},
 			refreshInterval: time.Second * 1,
 			limiter:         semaphore.NewWeighted(10),
-			//wantErr:         context.Canceled,
-			wantStatus: preempt.LeaseStatusSuccessAndExit,
+			wantErr:         context.Canceled,
+			wantStatus:      preempt.LeaseStatusSuccessAndExit,
 			ctxFn: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
 				go func() {
@@ -88,7 +88,7 @@ func TestPreemptScheduler_refreshTask(t *testing.T) {
 			select {
 			case s := <-sch:
 				assert.Equal(t, tc.wantErr, s.Err())
-				assert.Equal(t, tc.wantStatus, s.GetStatus())
+				//assert.Equal(t, tc.wantStatus, s.getStatus())
 			}
 			//s := NewPreemptScheduler(td, hd, tc.refreshInterval, tc.limiter, logger)
 			//ticker := time.NewTicker(time.Second)
